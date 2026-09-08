@@ -25,6 +25,13 @@ public:
     static void cmd_netinfo();
     static void cmd_ping(const char* args);
     static void cmd_http(const char* args);
+    static void cmd_ver();
+    static void cmd_whoami();
+    static void cmd_ascii();
+    static void cmd_beep(const char* args);
+    static void cmd_hexdump(const char* args);
+    static void cmd_pci();
+    static void cmd_gdt();
 };
 
 #endif

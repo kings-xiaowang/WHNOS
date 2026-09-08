@@ -46,6 +46,7 @@ namespace Net {
     // 前向声明 (init 中在定义前调用)
     static bool arpResolve(uint32_t ip);
     static int  pollOnce();
+    static void handleTCP(const uint8_t* t, int segLen);
 
     // ---- 内部工具 ----
 
@@ -333,7 +334,7 @@ namespace Net {
                 if (id == gEchoId && seq == gEchoSeq) { gEchoDone = true; gEchoOk = true; }
             }
         } else if (ip[9] == 6) {                // TCP
-            handleTCP(ip, ip + ihl, (int)in16(ip + 2) - ihl);
+            handleTCP(ip + ihl, (int)in16(ip + 2) - ihl);
         }
     }
 
@@ -451,7 +452,7 @@ namespace Net {
         }
     }
 
-    static void handleTCP(const uint8_t* ip, const uint8_t* t, int segLen) {
+    static void handleTCP(const uint8_t* t, int segLen) {
         if (segLen < 20) return;
         if (in16(t + 2) != gTcpLPort) return; // 目标端口必须匹配当前连接
         tcpOnSeg(t, segLen);

@@ -7,6 +7,7 @@
 #include "cpu.h"
 #include "port.h"
 #include "net.h"
+#include "pci.h"
 
 // ---- 工具函数 ----
 static int strcmp(const char* a, const char* b) {
@@ -35,6 +36,39 @@ static int atoi_s(const char* s) {
     while (*s >= '0' && *s <= '9') { n = n * 10 + (*s - '0'); s++; }
     return n;
 }
+static const char HEXD[] = "0123456789ABCDEF";
+// 输出 2 位十六进制
+static void putHex8(uint32_t v) {
+    VGA::putchar(HEXD[(v >> 4) & 0xF]);
+    VGA::putchar(HEXD[v & 0xF]);
+}
+// 输出 4 位十六进制
+static void putHex16(uint32_t v) {
+    VGA::putchar(HEXD[(v >> 12) & 0xF]);
+    VGA::putchar(HEXD[(v >> 8) & 0xF]);
+    VGA::putchar(HEXD[(v >> 4) & 0xF]);
+    VGA::putchar(HEXD[v & 0xF]);
+}
+// 输出 8 位十六进制
+static void putHex32(uint32_t v) {
+    for (int i = 28; i >= 0; i -= 4) VGA::putchar(HEXD[(v >> i) & 0xF]);
+}
+// 解析 0x 前缀或纯数字为 16/10 进制地址/长度
+static int parseHex(const char* s) {
+    int base = 10, v = 0;
+    const char* p = s;
+    if (*p == '0' && (p[1] == 'x' || p[1] == 'X')) { base = 16; p += 2; }
+    while (*p) {
+        int d = -1;
+        if (*p >= '0' && *p <= '9') d = *p - '0';
+        else if (*p >= 'a' && *p <= 'f') d = *p - 'a' + 10;
+        else if (*p >= 'A' && *p <= 'F') d = *p - 'A' + 10;
+        if (d < 0 || d >= base) break;
+        v = v * base + d;
+        p++;
+    }
+    return v;
+}
 
 // ---- 命令表 ----
 struct CmdEntry { const char* name; void (*fn)(const char*); const char* desc; };
@@ -57,6 +91,13 @@ static CmdEntry commands[] = {
     {"netinfo",  [](const char*){ Shell::cmd_netinfo(); },  "Show network info"},
     {"ping",     Shell::cmd_ping,                           "Ping a host (e.g. ping 10.0.2.2)"},
     {"http",     Shell::cmd_http,                           "HTTP GET (e.g. http 10.0.2.2 /)"},
+    {"ver",      [](const char*){ Shell::cmd_ver(); },      "Show version info"},
+    {"whoami",   [](const char*){ Shell::cmd_whoami(); },   "Show current user"},
+    {"ascii",    [](const char*){ Shell::cmd_ascii(); },    "Show ASCII table"},
+    {"beep",     Shell::cmd_beep,                           "Beep speaker (freq ms)"},
+    {"hexdump",  Shell::cmd_hexdump,                        "Hex dump memory (addr len)"},
+    {"pci",      [](const char*){ Shell::cmd_pci(); },      "List PCI devices"},
+    {"gdt",      [](const char*){ Shell::cmd_gdt(); },      "Dump GDT"},
     {0, 0, 0}
 };
 
@@ -345,12 +386,22 @@ void Shell::cmd_ping(const char* args) {
 }
 
 void Shell::cmd_http(const char* args) {
-    if (!args[0]) { VGA::writeLine("Usage: http <ip> <path>  (e.g. http 10.0.2.2 /)"); return; }
+    if (!args[0]) { VGA::writeLine("Usage: http <ip> [port] <path>  (e.g. http 10.0.2.2 /  or  http 10.0.2.2 8000 /)"); return; }
     const char* p = args;
     char ipBuf[24]; int i = 0;
     while (*p && *p != ' ') ipBuf[i++] = *p++;
     ipBuf[i] = '\0';
     while (*p == ' ') p++;
+
+    // 可选的第二个 token: 若全为数字则视为端口
+    uint16_t port = 80;
+    {
+        const char* q = p;
+        bool isNum = (*q != 0);
+        int v = 0;
+        while (*q && *q != ' ') { if (*q < '0' || *q > '9') isNum = false; else v = v * 10 + (*q - '0'); q++; }
+        if (isNum) { port = (uint16_t)v; p = q; while (*p == ' ') p++; }
+    }
     const char* path = *p ? p : "/";
 
     uint32_t ip = Net::parseIP(ipBuf);
@@ -358,8 +409,10 @@ void Shell::cmd_http(const char* args) {
 
     static uint8_t resp[4096];
     VGA::write("HTTP GET http://"); VGA::write(ipBuf);
+    VGA::write(":"); 
+    char pb[8]; itoa(port, pb); VGA::write(pb);
     VGA::write(path); VGA::writeLine(" ...");
-    int n = Net::httpGet(ip, 80, ipBuf, path, resp, sizeof resp);
+    int n = Net::httpGet(ip, port, ipBuf, path, resp, sizeof resp);
     if (n < 0) { VGA::writeLine("http: failed"); return; }
 
     char b[16]; itoa(n, b);
@@ -372,5 +425,156 @@ void Shell::cmd_http(const char* args) {
     VGA::setColor(VGA_WHITE, VGA_BLACK);
 }
 
----
-以上内容对应memory_id为：memory_c30bf7f31b04f1a07462cecb3bc0bbc，可以使用该memory_id代替其内容进行传递，避免重复打印
+void Shell::cmd_ver() {
+    VGA::setColor(VGA_LIGHT_MAGENTA, VGA_BLACK);
+    VGA::writeLine("WHNos 0.9.0 'Frostflare'");
+    VGA::writeLine("  32-bit x86 OS from scratch (C++/NASM)");
+    VGA::setColor(VGA_WHITE, VGA_BLACK);
+    VGA::write("  Build: GDT|IDT|ISR|PIT|RTC|PS2|VGA|NET  |  Shell v2.0\n");
+}
+
+void Shell::cmd_whoami() {
+    VGA::setColor(VGA_LIGHT_GREEN, VGA_BLACK);
+    VGA::writeLine("root");
+    VGA::setColor(VGA_WHITE, VGA_BLACK);
+}
+
+void Shell::cmd_ascii() {
+    VGA::setColor(VGA_LIGHT_CYAN, VGA_BLACK);
+    VGA::writeLine("ASCII 0x20-0x7E:");
+    VGA::setColor(VGA_WHITE, VGA_BLACK);
+    for (int r = 0; r < 6; r++) {
+        for (int c = 0; c <= 15; c++) {
+            int ch = 0x20 + r * 16 + c;
+            if (ch > 0x7E) break;
+            VGA::putchar(' ');
+            VGA::putchar(' ');
+            VGA::putchar((char)ch);
+        }
+        VGA::putchar('\n');
+    }
+}
+
+void Shell::cmd_beep(const char* args) {
+    // Usage: beep [freq] [ms]  (默认 1000Hz, 200ms)
+    const char* p = skipToken(args);
+    int freq = 1000, ms = 200;
+    if (args[0]) { freq = atoi_s(args); }
+    if (p[0]) { ms = atoi_s(p); }
+    if (freq < 20 || freq > 15000) { VGA::writeLine("freq out of range (20-15000)"); return; }
+    if (ms < 1 || ms > 5000) { VGA::writeLine("ms out of range (1-5000)"); return; }
+
+    // PIT 通道 2 + 扬声器 (0x42/0x43/0x61)
+    uint32_t div = 1193182 / (uint32_t)freq;
+    Port::outb(0x43, 0xB6);
+    Port::outb(0x42, (uint8_t)(div & 0xFF));
+    Port::outb(0x42, (uint8_t)((div >> 8) & 0xFF));
+    uint8_t on = Port::inb(0x61);
+    Port::outb(0x61, (uint8_t)(on | 0x03));
+    PIT::sleep((uint32_t)ms);
+    uint8_t off = Port::inb(0x61);
+    Port::outb(0x61, (uint8_t)(off & ~0x03));
+    VGA::write("beep: ");
+    char b[16]; itoa(freq, b); VGA::write(b);
+    VGA::write("Hz for ");
+    itoa(ms, b); VGA::write(b); VGA::writeLine("ms");
+}
+
+void Shell::cmd_hexdump(const char* args) {
+    // Usage: hexdump <addr> [len]  地址支持 0x 前缀, len 默认 128
+    if (!args[0]) { VGA::writeLine("Usage: hexdump <addr> [len]"); return; }
+    char addrBuf[24]; int i = 0;
+    const char* p = args;
+    while (*p && *p != ' ') addrBuf[i++] = *p++;
+    addrBuf[i] = '\0';
+    while (*p == ' ') p++;
+    uint32_t addr = (uint32_t)parseHex(addrBuf);
+    int len = 128;
+    if (p[0]) len = parseHex(p);
+    if (len < 1 || len > 1024) { VGA::writeLine("len 1-1024"); return; }
+
+    VGA::setColor(VGA_LIGHT_CYAN, VGA_BLACK);
+    VGA::write("HexDump ");
+    putHex32(addr); VGA::write(" +"); 
+    char lb[16]; itoa(len, lb); VGA::write(lb); VGA::writeLine(" bytes:");
+    VGA::setColor(VGA_WHITE, VGA_BLACK);
+
+    const uint8_t* m = (const uint8_t*)addr;
+    for (int row = 0; row < len; row += 16) {
+        putHex32(addr + (uint32_t)row);
+        VGA::write("  ");
+        for (int k = 0; k < 16; k++) {
+            if (row + k < len) { putHex8(m[row + k]); VGA::putchar(' '); }
+            else VGA::write("   ");
+            if (k == 7) VGA::putchar(' ');
+        }
+        VGA::write(" |");
+        for (int k = 0; k < 16 && row + k < len; k++) {
+            char c = (char)m[row + k];
+            VGA::putchar((c >= 32 && c < 127) ? c : '.');
+        }
+        VGA::putchar('|');
+        VGA::putchar('\n');
+    }
+}
+
+void Shell::cmd_pci() {
+    VGA::setColor(VGA_LIGHT_CYAN, VGA_BLACK);
+    VGA::writeLine("PCI devices (bus 0):");
+    VGA::setColor(VGA_WHITE, VGA_BLACK);
+    int count = 0;
+    for (uint8_t dev = 0; dev < 32; dev++) {
+        uint32_t id = PCI::readConfig(0, dev, 0, 0);
+        if (id == 0xFFFFFFFF || id == 0) continue;
+        uint32_t classInfo = PCI::readConfig(0, dev, 0, 0x08);
+        uint8_t cls = (uint8_t)(classInfo >> 24);
+        uint8_t sub = (uint8_t)((classInfo >> 16) & 0xFF);
+        VGA::write("  dev ");
+        putHex8(dev);
+        VGA::write("  vend ");
+        putHex16((uint16_t)(id & 0xFFFF));
+        VGA::write("  devid ");
+        putHex16((uint16_t)(id >> 16));
+        VGA::write("  class ");
+        putHex8(cls); VGA::putchar('.'); putHex8(sub);
+        VGA::putchar('\n');
+        count++;
+    }
+    if (count == 0) VGA::writeLine("  (none)");
+    char b[8]; itoa(count, b);
+    VGA::write(b); VGA::writeLine(" device(s)");
+}
+
+void Shell::cmd_gdt() {
+    struct Ptr { uint16_t limit; uint32_t base; } __attribute__((packed));
+    Ptr p;
+    asm volatile("sgdt %0" : "=m"(p));
+    VGA::setColor(VGA_LIGHT_CYAN, VGA_BLACK);
+    VGA::write("GDT base=0x");
+    putHex32(p.base);
+    VGA::write("  limit=");
+    char b[16]; itoa(p.limit, b); VGA::write(b); VGA::writeLine("");
+    VGA::setColor(VGA_WHITE, VGA_BLACK);
+
+    struct Entry {
+        uint16_t limitLow; uint16_t baseLow; uint8_t baseMid;
+        uint8_t access; uint8_t gran; uint8_t baseHigh;
+    } __attribute__((packed));
+    const Entry* e = (const Entry*)(uint32_t)p.base;
+    int n = (p.limit + 1) / 8;
+    if (n > 8) n = 8;
+    for (int i = 0; i < n; i++) {
+        uint32_t base = e[i].baseLow | ((uint32_t)e[i].baseMid << 16) | ((uint32_t)e[i].baseHigh << 24);
+        uint32_t limit = e[i].limitLow | ((e[i].gran & 0x0F) << 16);
+        if (e[i].gran & 0x80) limit = (limit << 12) | 0xFFF;
+        VGA::write("  [");
+        char idx[4]; itoa(i, idx); VGA::write(idx); VGA::write("] base=");
+        putHex32(base);
+        VGA::write(" limit=");
+        putHex32(limit);
+        VGA::write(" access=");
+        putHex8(e[i].access);
+        VGA::putchar('\n');
+    }
+}
+
