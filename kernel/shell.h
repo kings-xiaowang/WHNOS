@@ -32,6 +32,7 @@ public:
     static void cmd_hexdump(const char* args);
     static void cmd_pci();
     static void cmd_gdt();
+    static void cmd_pkg(const char* args);
 };
 
 #endif

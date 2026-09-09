@@ -7,6 +7,7 @@
 #include "keyboard.h"
 #include "pit.h"
 #include "net.h"
+#include "pkg.h"
 #include "shell.h"
 
 extern "C" void kernel_main(unsigned int magic, unsigned int addr) {

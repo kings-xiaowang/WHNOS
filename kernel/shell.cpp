@@ -8,6 +8,7 @@
 #include "port.h"
 #include "net.h"
 #include "pci.h"
+#include "pkg.h"
 
 // ---- 工具函数 ----
 static int strcmp(const char* a, const char* b) {
@@ -98,6 +99,7 @@ static CmdEntry commands[] = {
     {"hexdump",  Shell::cmd_hexdump,                        "Hex dump memory (addr len)"},
     {"pci",      [](const char*){ Shell::cmd_pci(); },      "List PCI devices"},
     {"gdt",      [](const char*){ Shell::cmd_gdt(); },      "Dump GDT"},
+    {"pkg",      Shell::cmd_pkg,                            "Package mgr (pkg update/list/install/cat)"},
     {0, 0, 0}
 };
 
@@ -575,6 +577,92 @@ void Shell::cmd_gdt() {
         VGA::write(" access=");
         putHex8(e[i].access);
         VGA::putchar('\n');
+    }
+}
+
+void Shell::cmd_pkg(const char* args) {
+    // pkg update <ip> [port]
+    // pkg list [installed]
+    // pkg install <name> <ip> [port]
+    // pkg cat <name> [nbytes]
+    if (!args[0]) {
+        VGA::writeLine("Usage:");
+        VGA::writeLine("  pkg update <ip> [port]        fetch index from source");
+        VGA::writeLine("  pkg list [installed]          list packages");
+        VGA::writeLine("  pkg install <name> <ip> [port] install a package");
+        VGA::writeLine("  pkg cat <name> [nbytes]       show installed package content");
+        return;
+    }
+
+    const char* p = args;
+    char sub[12]; int si = 0;
+    while (*p && *p != ' ') { if (si < 11) sub[si++] = *p; p++; }
+    sub[si] = '\0';
+    while (*p == ' ') p++;
+
+    if (strcmp(sub, "update") == 0) {
+        if (!p[0]) { VGA::writeLine("Usage: pkg update <ip> [port]"); return; }
+        char ipBuf[24]; int i = 0;
+        while (*p && *p != ' ') ipBuf[i++] = *p++;
+        ipBuf[i] = '\0';
+        while (*p == ' ') p++;
+        uint16_t port = 8000;
+        if (p[0]) { int v = atoi_s(p); if (v > 0 && v < 65536) port = (uint16_t)v; }
+        if (Net::parseIP(ipBuf) == 0xFFFFFFFF) { VGA::writeLine("Bad IP"); return; }
+        VGA::write("pkg: fetching index from ");
+        VGA::write(ipBuf); VGA::putchar(':');
+        char pb[8]; itoa(port, pb); VGA::write(pb); VGA::writeLine(" ...");
+        int r = Pkg::update(ipBuf, port);
+        if (r == 0) {
+            char b[8]; itoa(Pkg::count(), b);
+            VGA::setColor(VGA_LIGHT_GREEN, VGA_BLACK);
+            VGA::write("pkg: index ok, "); VGA::write(b); VGA::writeLine(" package(s)");
+            VGA::setColor(VGA_WHITE, VGA_BLACK);
+        } else {
+            VGA::setColor(VGA_LIGHT_RED, VGA_BLACK);
+            VGA::write("pkg: update failed: "); VGA::writeLine(Pkg::lastError());
+            VGA::setColor(VGA_WHITE, VGA_BLACK);
+        }
+    } else if (strcmp(sub, "list") == 0) {
+        bool onlyInstalled = false;
+        if (p[0] && strcmp(p, "installed") == 0) onlyInstalled = true;
+        Pkg::list(onlyInstalled);
+    } else if (strcmp(sub, "install") == 0) {
+        char nameBuf[Pkg::MAX_NAME]; int i = 0;
+        while (*p && *p != ' ') { if (i < (int)sizeof nameBuf - 1) nameBuf[i++] = *p; p++; }
+        nameBuf[i] = '\0';
+        while (*p == ' ') p++;
+        if (!nameBuf[0] || !p[0]) {
+            VGA::writeLine("Usage: pkg install <name> <ip> [port]");
+            return;
+        }
+        char ipBuf[24]; int j = 0;
+        while (*p && *p != ' ') ipBuf[j++] = *p++;
+        ipBuf[j] = '\0';
+        while (*p == ' ') p++;
+        uint16_t port = 8000;
+        if (p[0]) { int v = atoi_s(p); if (v > 0 && v < 65536) port = (uint16_t)v; }
+        if (Net::parseIP(ipBuf) == 0xFFFFFFFF) { VGA::writeLine("Bad IP"); return; }
+        if (Pkg::install(nameBuf, ipBuf, port) != 0) {
+            VGA::setColor(VGA_LIGHT_RED, VGA_BLACK);
+            VGA::write("pkg: install failed: "); VGA::writeLine(Pkg::lastError());
+            VGA::setColor(VGA_WHITE, VGA_BLACK);
+        }
+    } else if (strcmp(sub, "cat") == 0) {
+        char nameBuf[Pkg::MAX_NAME]; int i = 0;
+        while (*p && *p != ' ') { if (i < (int)sizeof nameBuf - 1) nameBuf[i++] = *p; p++; }
+        nameBuf[i] = '\0';
+        while (*p == ' ') p++;
+        if (!nameBuf[0]) { VGA::writeLine("Usage: pkg cat <name> [nbytes]"); return; }
+        int amount = 256;
+        if (p[0]) amount = atoi_s(p);
+        if (Pkg::cat(nameBuf, amount) < 0) {
+            VGA::setColor(VGA_LIGHT_RED, VGA_BLACK);
+            VGA::write("pkg: cat failed: "); VGA::writeLine(Pkg::lastError());
+            VGA::setColor(VGA_WHITE, VGA_BLACK);
+        }
+    } else {
+        VGA::writeLine("pkg: unknown subcommand (update/list/install/cat)");
     }
 }
 

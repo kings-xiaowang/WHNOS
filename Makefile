@@ -21,6 +21,7 @@ OBJS = $(BUILD_DIR)/boot.o       \
        $(BUILD_DIR)/rtl8139.o    \
        $(BUILD_DIR)/e1000.o      \
        $(BUILD_DIR)/net.o        \
+       $(BUILD_DIR)/pkg.o        \
        $(BUILD_DIR)/kernel.o     \
        $(BUILD_DIR)/port.o       \
        $(BUILD_DIR)/vga.o        \
@@ -93,6 +94,9 @@ $(BUILD_DIR)/e1000.o: kernel/e1000.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/net.o: kernel/net.cpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/pkg.o: kernel/pkg.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 # 链接
